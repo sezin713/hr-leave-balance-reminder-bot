@@ -319,8 +319,3 @@ The burn rate engine applies the following data-quality guards. Employees that f
 - Audit log appended to Google Sheets after each run
 - Slack summary digest node
 
----
-
-## License
-
-This template is sold as a single-use licence. You may use and modify it for your own organisation. Redistribution or resale is not permitted.
