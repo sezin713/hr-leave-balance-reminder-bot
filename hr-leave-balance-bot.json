@@ -1,0 +1,462 @@
+{
+  "name": "HR Leave Balance Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "months",
+              "triggerAtHour": 21
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "147063c9-fdf9-4db7-8905-9267d76d530e",
+      "name": "01 — Monthly Schedule"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1yaiQkoZSOELk8kUDnhQJ4Yem-yaQuykcwN-U0q3XXJY",
+          "mode": "list",
+          "cachedResultName": "hr_mock_data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1yaiQkoZSOELk8kUDnhQJ4Yem-yaQuykcwN-U0q3XXJY/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1792363977,
+          "mode": "list",
+          "cachedResultName": "hr_mock_data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1yaiQkoZSOELk8kUDnhQJ4Yem-yaQuykcwN-U0q3XXJY/edit#gid=1792363977"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        208,
+        0
+      ],
+      "id": "c9821640-9d74-43d7-a582-0dbe2331f941",
+      "name": "02 — Fetch Employee Data",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "UxXpY7hdTfQlDZhU",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const employees = $input.all();\nconst results = [];\nconst today = new Date();\n\nfor (const item of employees) {\n  const emp = item.json;\n\n  if (emp.status !== 'active') continue;\n\n  const leaveBalance = parseInt(emp.leaveBalance);\n  const leaveTotal = parseInt(emp.leaveTotal);\n  if (isNaN(leaveBalance) || isNaN(leaveTotal)) continue;\n  if (leaveTotal <= 0) continue;\n  if (leaveBalance < 0) continue;\n  if (leaveBalance > leaveTotal) continue;\n  if (leaveBalance === 0) continue;\n\n  const hireDate = new Date(emp.hireDate);\n  if (isNaN(hireDate.getTime())) continue;\n  const tenureDays = Math.floor((today - hireDate) / (1000 * 60 * 60 * 24));\n  if (tenureDays < 90) continue;\n\n  const renewalDate = new Date(hireDate);\n  renewalDate.setFullYear(today.getFullYear());\n  if (renewalDate <= today) {\n    renewalDate.setFullYear(today.getFullYear() + 1);\n  }\n  const daysUntilRenewal = Math.ceil((renewalDate - today) / (1000 * 60 * 60 * 24));\n  const burnRate = leaveBalance / daysUntilRenewal;\n  const usedPercentage = Math.round(((leaveTotal - leaveBalance) / leaveTotal) * 100);\n  const renewalDateFormatted = renewalDate.toLocaleDateString('en-US', {\n    year: 'numeric',\n    month: 'long',\n    day: 'numeric'\n  });\n\n  let alertLevel = null;\n  let alertEmoji = '';\n  let urgency = '';\n\n  if (burnRate >= 0.5) {\n    alertLevel = 'critical';\n    alertEmoji = '🔴';\n    urgency = 'CRITICAL';\n  } else if (burnRate >= 0.2) {\n    alertLevel = 'warning';\n    alertEmoji = '🟠';\n    urgency = 'WARNING';\n  } else if (burnRate >= 0.1) {\n    alertLevel = 'low';\n    alertEmoji = '🟡';\n    urgency = 'LOW';\n  } else {\n    continue;\n  }\n\n  results.push({\n    json: {\n      id: emp.id,\n      name: emp.name,\n      email: emp.email,\n      department: emp.department,\n      hireDate: emp.hireDate,\n      tenureDays: tenureDays,\n      leaveBalance: leaveBalance,\n      leaveTotal: leaveTotal,\n      usedPercentage: usedPercentage,\n      renewalDate: renewalDateFormatted,\n      daysUntilRenewal: daysUntilRenewal,\n      burnRate: Math.round(burnRate * 100) / 100,\n      alertLevel: alertLevel,\n      alertEmoji: alertEmoji,\n      urgency: urgency\n    }\n  });\n}\n\nresults.sort((a, b) => b.json.burnRate - a.json.burnRate);\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "8bc67f0e-a95f-4382-bbe9-757d58862e7f",
+      "name": "03 — Calculate Burn Rate"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const emp = item.json;\n\n  const templates = {\n    critical: {\n      subject: `Action Required: ${emp.leaveBalance} Leave Days Expiring on ${emp.renewalDate}`,\n      body: `Hi ${emp.name},\n\nThis is a reminder that you currently have ${emp.leaveBalance} unused leave days out of your ${emp.leaveTotal} day annual entitlement.\n\nYour leave balance will reset on ${emp.renewalDate} — that's ${emp.daysUntilRenewal} days from now. Any unused days will be forfeited after this date.\n\nAction Required:\n- Plan and book your remaining ${emp.leaveBalance} leave days before ${emp.renewalDate}\n- Submit your time-off request through the HR portal\n- Coordinate with your manager to agree on dates\n\nPlease make sure to use your entitled leave. Taking time off is important for your wellbeing and productivity.\n\nIf you have any questions, please reach out to your HR Business Partner.\n\nBest regards,\nHR Team`\n    },\n    warning: {\n      subject: `Reminder: ${emp.leaveBalance} Leave Days Remaining — Expiring ${emp.renewalDate}`,\n      body: `Hi ${emp.name},\n\nYou have ${emp.leaveBalance} leave days remaining out of your ${emp.leaveTotal} day annual entitlement.\n\nYour leave balance resets on ${emp.renewalDate} (${emp.daysUntilRenewal} days away). Unused days will not carry over.\n\nAction Required:\n- Start planning your remaining ${emp.leaveBalance} days before ${emp.renewalDate}\n- Submit your time-off request through the HR portal\n- Align with your manager on preferred dates\n\nWe encourage you to take your well-deserved time off!\n\nIf you have any questions, please reach out to your HR Business Partner.\n\nBest regards,\nHR Team`\n    },\n    low: {\n      subject: `Friendly Reminder: ${emp.leaveBalance} Leave Days Left Before ${emp.renewalDate}`,\n      body: `Hi ${emp.name},\n\nJust a quick reminder that you have ${emp.leaveBalance} leave days remaining before your balance resets on ${emp.renewalDate}.\n\nAction Required:\n- Book your remaining ${emp.leaveBalance} days before ${emp.renewalDate}\n- Submit your request through the HR portal\n\nIf you have any questions, feel free to reach out to your HR Business Partner.\n\nBest regards,\nHR Team`\n    }\n  };\n\n  const template = templates[emp.alertLevel];\n\n  results.push({\n    json: {\n      id: emp.id,\n      name: emp.name,\n      email: emp.email,\n      department: emp.department,\n      leaveBalance: emp.leaveBalance,\n      leaveTotal: emp.leaveTotal,\n      renewalDate: emp.renewalDate,\n      daysUntilRenewal: emp.daysUntilRenewal,\n      alertLevel: emp.alertLevel,\n      alertEmoji: emp.alertEmoji,\n      urgency: emp.urgency,\n      emailSubject: template.subject,\n      emailBody: template.body\n    }\n  });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        0
+      ],
+      "id": "f08d8dfa-58a1-4a1c-aedf-97e5525e5532",
+      "name": "04 — Build Email Content"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.emailSubject }}",
+        "emailType": "text",
+        "message": "={{ $json.emailBody }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        848,
+        0
+      ],
+      "id": "e9e32f0e-8a2a-4b66-931f-6eb1e2d67dd1",
+      "name": "05 — Send Email",
+      "webhookId": "47ec849f-6505-4c29-849f-e698ce5f40e7",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "ac5ypA8bbUDxxvVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1yaiQkoZSOELk8kUDnhQJ4Yem-yaQuykcwN-U0q3XXJY",
+          "mode": "list",
+          "cachedResultName": "hr_mock_data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1yaiQkoZSOELk8kUDnhQJ4Yem-yaQuykcwN-U0q3XXJY/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1787571054,
+          "mode": "list",
+          "cachedResultName": "Log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1yaiQkoZSOELk8kUDnhQJ4Yem-yaQuykcwN-U0q3XXJY/edit#gid=1787571054"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ new Date().toISOString() }}",
+            "employeeID": "={{ $('04 — Build Email Content').item.json.id }}",
+            "employeeName": "={{ $('04 — Build Email Content').item.json.name }}",
+            "department": "={{ $('04 — Build Email Content').item.json.department }}",
+            "leaveBalance": "={{ $('04 — Build Email Content').item.json.leaveBalance }}",
+            "renewalDate": "={{ $('04 — Build Email Content').item.json.renewalDate }}",
+            "daysUntilRenewal": "={{ $('04 — Build Email Content').item.json.daysUntilRenewal }}",
+            "burnRate": "={{ $('03 — Calculate Burn Rate').item.json.burnRate }}",
+            "alertLevel": "={{ $('04 — Build Email Content').item.json.alertLevel }}",
+            "emailSubject": "={{ $('04 — Build Email Content').item.json.emailSubject }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "employeeID",
+              "displayName": "employeeID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "employeeName",
+              "displayName": "employeeName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "department",
+              "displayName": "department",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "leaveBalance",
+              "displayName": "leaveBalance",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "renewalDate",
+              "displayName": "renewalDate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "daysUntilRenewal",
+              "displayName": "daysUntilRenewal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "burnRate",
+              "displayName": "burnRate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "alertLevel",
+              "displayName": "alertLevel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "emailSubject",
+              "displayName": "emailSubject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1056,
+        0
+      ],
+      "id": "54796633-ff9b-4f53-97cb-3876034310db",
+      "name": "06 — Log to Google Sheets",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "UxXpY7hdTfQlDZhU",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#hr-alerts",
+          "mode": "name"
+        },
+        "text": "=📊 HR Leave Reminder — Monthly Run Complete  🔴 Critical: {{ $('Calculate Leave').all().filter(i => i.json.alertLevel === 'critical').length }} 🟡 Low: {{ $('Calculate Leave').all().filter(i => i.json.alertLevel === 'low').length }} 📧 Total emails sent: {{ $('Calculate Leave').all().length }} 📅 Run date: {{ new Date().toLocaleDateString('en-US', {year: 'numeric', month: 'long', day: 'numeric'}) }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        1424,
+        -160
+      ],
+      "id": "2978e938-ba0b-4d6b-b7ef-f3eeadb416c7",
+      "name": "07a — Notify via Slack",
+      "webhookId": "a84ab93b-c1f1-443c-b9d3-9792291a170e"
+    },
+    {
+      "parameters": {
+        "resource": "channelMessage",
+        "teamId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "channelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "message": "=📊 HR Leave Reminder — Monthly Run Complete\n\n🔴 Critical: {{ $('Calculate Leave').all().filter(i => i.json.alertLevel === 'critical').length }}\n🟡 Low: {{ $('Calculate Leave').all().filter(i => i.json.alertLevel === 'low').length }}\n📧 Total emails sent: {{ $('Calculate Leave').all().length }}\n📅 Run date: {{ new Date().toLocaleDateString('en-US', {year: 'numeric', month: 'long', day: 'numeric'}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftTeams",
+      "typeVersion": 2,
+      "position": [
+        1424,
+        208
+      ],
+      "id": "6ab0db80-0d04-4f79-9212-e0bd4d20e710",
+      "name": "07b — Notify via Teams",
+      "webhookId": "99b1dafc-fc67-4fb7-9eb0-2439cc554476"
+    },
+    {
+      "parameters": {
+        "content": "HR Leave Balance Reminder Bot \n\nMonitors employee leave balances and sends personalized \nreminders based on burn rate analysis.\n\nBurn Rate = leaveBalance / daysUntilRenewal\n🔴 Critical: 0.5+\n🟡 Low: 0.1 – 0.19\n⏭️ No alert: below 0.1",
+        "height": 272,
+        "width": 256,
+        "color": "#5E315D"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -320,
+        -32
+      ],
+      "typeVersion": 1,
+      "id": "49b9980f-a4ae-4dad-a9b9-3318399811bf",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "DATA SOURCE\nDefault: Google Sheets\nReplace this node with BambooHR / Workday / Personio\nto connect your HRIS system.",
+        "width": 192,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        160,
+        -192
+      ],
+      "typeVersion": 1,
+      "id": "e41c2bc0-00ee-403c-8026-215cd1d1eab6",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "PROCESSING ENGINE\nValidates data, filters inactive employees,\nskips new hires (< 90 days tenure),\ncalculates burn rate and alert level.",
+        "width": 304,
+        "color": "#243800"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        416,
+        -192
+      ],
+      "typeVersion": 1,
+      "id": "eab4e8f8-4d70-4cf6-ad5d-7c8b55bd2a5e",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "NOTIFICATIONS\nActivate only ONE notification node.\n07a → Slack: add your workspace credential\n07b → Teams: add your Teams webhook URL\nBoth are pre-configured with HR summary message.",
+        "height": 128,
+        "width": 336,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1328,
+        32
+      ],
+      "typeVersion": 1,
+      "id": "775f19a8-45cb-4a51-b7ef-2eafa75f596c",
+      "name": "Sticky Note3"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "01 — Monthly Schedule": {
+      "main": [
+        [
+          {
+            "node": "02 — Fetch Employee Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 — Fetch Employee Data": {
+      "main": [
+        [
+          {
+            "node": "03 — Calculate Burn Rate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 — Calculate Burn Rate": {
+      "main": [
+        [
+          {
+            "node": "04 — Build Email Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 — Build Email Content": {
+      "main": [
+        [
+          {
+            "node": "05 — Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 — Send Email": {
+      "main": [
+        [
+          {
+            "node": "06 — Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 — Log to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "07b — Notify via Teams",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "07a — Notify via Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "07b — Notify via Teams": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "7d8bdbc2-d829-4825-829f-b802a1bf03bc",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "94c9a2619fbb63364b4b46b9af1b343ec04da28039556218fef1d9cfe14b6179"
+  },
+  "id": "2EYGGC867RV4CLqz",
+  "tags": []
+}
